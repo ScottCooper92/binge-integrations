@@ -13,7 +13,8 @@ catalog inside the app). No dynamic code loading: each companion app runs its ow
 process, and only data crosses the IPC boundary.
 
 > **Status: pre-alpha.** The contracts are under active design. Nothing here is stable yet, and no
-> artifacts are published. See the [wiki](../../wiki) for the architecture and roadmap.
+> artifacts are published. See [docs/Architecture.md](docs/Architecture.md) for the platform
+> decisions and [docs/Roadmap.md](docs/Roadmap.md) for the build order.
 
 ## How it works
 
