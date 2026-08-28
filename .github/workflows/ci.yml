@@ -27,3 +27,19 @@ jobs:
 
       - name: Build and test
         run: ./gradlew build
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+
+      - name: Lint protos
+        run: buf lint
+
+      - name: Check wire compatibility against main
+        if: github.event_name == 'pull_request'
+        run: buf breaking --against "https://github.com/${{ github.repository }}.git#branch=main"

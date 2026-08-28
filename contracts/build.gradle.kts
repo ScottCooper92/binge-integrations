@@ -1,13 +1,14 @@
+import com.google.protobuf.gradle.id
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
-    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.protobuf)
 }
 
 group = "io.github.scottcooper92"
 version = "0.1.0-SNAPSHOT"
 
 kotlin {
-    explicitApi()
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
@@ -19,11 +20,42 @@ java {
 }
 
 dependencies {
-    implementation(libs.kotlinx.serialization.json)
+    api(libs.protobuf.kotlin.lite)
+    api(libs.grpc.stub)
+    api(libs.grpc.protobuf.lite)
+    api(libs.grpc.kotlin.stub)
+    api(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.junit.jupiter.api)
     testImplementation(libs.junit.jupiter.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}"
+    }
+    plugins {
+        id("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:${libs.versions.grpc.get()}"
+        }
+        id("grpckt") {
+            artifact = "io.grpc:protoc-gen-grpc-kotlin:${libs.versions.grpcKotlin.get()}:jdk8@jar"
+        }
+    }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                named("java") { option("lite") }
+                id("kotlin") { option("lite") }
+            }
+            task.plugins {
+                id("grpc") { option("lite") }
+                id("grpckt")
+            }
+        }
+    }
 }
 
 tasks.withType<Test> {

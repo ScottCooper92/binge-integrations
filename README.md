@@ -22,13 +22,16 @@ process, and only data crosses the IPC boundary.
   action (`com.binge.integration.REQUEST`, `.STREAM`, `.TRACKING`, `.PLAYER`). Manifest
   `<meta-data>` carries the display name, icon, and contract version, so Binge can list installed
   companions without waking their processes.
-- **Transport** — versioned JSON payloads over a thin AIDL surface (`String`/`byte[]` plus callback
-  interfaces). No custom Parcelables cross the app boundary. Results are paged and artwork travels
-  as URLs, never bytes, to respect the ~1 MB Binder transaction limit.
+- **Transport** — gRPC over the official Android Binder transport (`io.grpc:grpc-binder`), with
+  protocol-buffer messages. The `.proto` files in `contracts/` are the normative contract; a
+  companion implements a generated service base (suspend functions and `Flow`s via grpc-kotlin)
+  and is unit-testable on the JVM without a device. Results are paged and artwork travels as URLs,
+  never bytes, to respect the ~1 MB Binder transaction limit.
 - **Media identity** — every payload addresses media as media type + TMDB id (+ season/episode).
   The companion app owns translation into any other id space.
-- **Versioning** — contracts version independently, handshake at bind time, and evolve
-  append-only.
+- **Versioning** — the proto package version (`binge.integration.request.v1`) is the contract
+  major; within a package, evolution is strictly additive and `buf breaking` gates it in CI. A
+  handshake rpc opens every connection and declares the companion's capabilities.
 
 ## Security model
 
@@ -54,14 +57,14 @@ Verification is mutual and part of the contract:
 
 | Coordinates | Contents |
 | --- | --- |
-| `io.github.scottcooper92:binge-integration-contracts` | Transport objects and contract constants (pure Kotlin/JVM) |
-| `io.github.scottcooper92:binge-integration-sdk` | Android library for companion apps: service scaffolding, caller verification, handshake |
+| `io.github.scottcooper92:binge-integration-contracts` | Protobuf messages + gRPC service stubs (protobuf-javalite, grpc-kotlin; Kotlin/JVM) |
+| `io.github.scottcooper92:binge-integration-sdk` | Android library for companion apps: binder server bootstrap, `SecurityPolicy` caller verification, handshake scaffold |
 | `io.github.scottcooper92:binge-integration-conformance` | Test harness that validates a companion app against the contract |
 
 ## Repository layout
 
 ```
-contracts/   Transport objects and contract constants (Kotlin/JVM, no Android dependency)
+contracts/   The .proto contracts + generated Kotlin/JVM stubs (messages, gRPC services)
 ```
 
 The SDK, conformance harness, and the reference companion app will join as they are built.
