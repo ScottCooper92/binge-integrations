@@ -1,11 +1,12 @@
 # Architecture
 
-The platform decisions below are locked at the direction level. Contract shapes are design until
-the first stub companion app proves them with real traffic.
+These decisions are locked at the direction level. The contract shapes stay a draft until a real
+companion app proves them with real traffic.
 
 ## Transport: companion APKs over Binder IPC
 
-A companion app exports one bound Service per capability, discovered by intent action:
+A companion app exports one bound Service for each capability. Binge matches the Service by its
+intent action:
 
 | Action | Capability |
 | --- | --- |
@@ -14,89 +15,87 @@ A companion app exports one bound Service per capability, discovered by intent a
 | `com.binge.integration.TRACKING` | Sync watch state with an external tracker |
 | `com.binge.integration.PLAYER` | External playback with a progress callback |
 
-- Binge declares matching `<queries>` entries (Android 11+ package visibility).
-- Manifest `<meta-data>` on the Service carries the display name, icon, and the contract majors it
-  serves, so the host can render its integrations list — and spot a version mismatch — without
-  waking the companion process.
+- Binge declares matching `<queries>` entries. Android 11+ needs them for package visibility.
+- The Service's manifest `<meta-data>` carries the display name, the icon, and the supported
+  contract majors. From this data alone, Binge renders its integrations list and detects a version
+  mismatch. Binge does not need to start the companion process for either.
 
 ## RPC layer: gRPC over Binder, protobuf payloads
 
-Calls cross the app boundary as gRPC, over the official Android Binder transport
-(`io.grpc:grpc-binder`), with protocol-buffer messages (`protobuf-javalite` at runtime). The
-`.proto` files in `contracts/` are the normative contract; stubs, docs, and the conformance
-harness generate from them.
+Calls cross the app boundary as gRPC. The transport is the official Android Binder transport
+(`io.grpc:grpc-binder`). The messages are protocol buffers (`protobuf-javalite` at runtime). The
+`.proto` files in `contracts/` are the normative contract. The stubs, the docs, and the
+conformance harness generate from them.
 
-Why gRPC instead of a hand-rolled thin-AIDL + JSON surface (the earlier design):
+The earlier design was a thin AIDL surface with JSON payloads. gRPC replaced it for these reasons:
 
-- The service definition is the documentation — typed rpcs instead of AIDL methods that marshal
-  opaque JSON strings.
-- An integration author implements a generated service base (suspend functions and `Flow`s via
-  grpc-kotlin). No marshalling code, no bespoke callback-registration protocol.
-- A gRPC service runs over any channel, so an implementation is unit-testable on the JVM with no
-  device, and the conformance harness needs no emulator.
-- Streaming rpcs replace hand-rolled callbacks; deadlines, cancellation, and a standard error
-  model come with the framework.
-- `grpc-binder`'s `SecurityPolicy` implements the mutual signing-cert verification the contract
-  requires — configuration instead of hand-written security code.
+- The service definition documents itself. Typed rpcs replace AIDL methods that carry opaque JSON
+  strings.
+- An integration author implements a generated service base. With grpc-kotlin, the methods are
+  suspend functions and `Flow`s. There is no marshalling code and no custom callback protocol.
+- A gRPC service runs over any channel. An author can unit-test an implementation on the JVM
+  without a device. The conformance harness needs no emulator.
+- Streaming rpcs replace hand-made callback interfaces. Deadlines, cancellation, and a standard
+  error model come with the framework.
+- The `SecurityPolicy` API in `grpc-binder` does the mutual signing-cert verification. That makes
+  it configuration, not custom security code.
 
 Practical rules:
 
-- Errors travel as gRPC status codes; response messages never carry error fields. Each contract
-  documents its code mapping in the `.proto`.
-- Respect the ~1 MB Binder transaction limit: results are paged; artwork travels as URLs, never
+- Errors travel as gRPC status codes. Response messages never carry error fields. Each contract
+  documents its code mapping in its `.proto` file.
+- The Binder transaction limit is about 1 MB. Page all results. Send artwork as URLs, never as
   bytes.
-- The REQUEST stub spike validates the transport on real hardware (phone and a SHIELD-class TV
-  device) and measures the APK cost after R8, before the contract is declared stable.
+- The REQUEST stub spike validates the transport on real hardware: a phone and a SHIELD-class TV
+  device. It also measures the APK cost after R8. The contract stays a draft until then.
 
 ## Media identity
 
-Every payload addresses media as **media type + TMDB id (+ season/episode)**. The companion app
-owns translation into any other id space (its server's ids, IMDb, TVDB, …).
+Every payload identifies media as **media type + TMDB id (+ season/episode)**. The companion app
+owns translation into other id spaces: its server's ids, IMDb, TVDB, and so on.
 
 ## Capabilities
 
-The intent action is the discovery unit; the capability set is the feature-detection unit inside
-it. Each contract keeps a small mandatory core (for REQUEST: handshake, submit, status). Every
-other rpc is gated by a declared capability.
+The intent action is the discovery unit. The capability set is the feature-detection unit inside
+it. Each contract keeps a small mandatory core. For REQUEST, the core is handshake, submit, and
+status. A declared capability gates every other rpc.
 
-- **Static capabilities** — declared once in the handshake response: everything this connection can
-  ever do, for this provider and this signed-in user. The host hides UI for undeclared
-  capabilities and never calls a gated rpc without one.
-- **Dynamic per-item actions** — each status response lists the subset that applies to that title
-  right now (for example, approve appears only on a pending request the user may moderate).
+- **Static capabilities.** The handshake response declares them once. They cover everything this
+  connection can ever do, for this provider and this user. The host hides UI for undeclared
+  capabilities. The host never calls a gated rpc without its capability.
+- **Dynamic per-item actions.** Each status response lists the subset that applies to that title
+  now. For example, approve appears only on a pending request that the user may moderate.
 
-The boundary rule: a behavioural variation over the same data model is a capability; a new data
-model with its own lifecycle is a new contract. Capability enums are append-only, and peers ignore
-values they do not recognise. Feature detection never rides on version numbers.
+The boundary rule: a behavior variation over the same data model is a capability. A new data model
+with its own lifecycle is a new contract. Capability enums grow by appending. Peers ignore values
+they do not know. Feature detection never uses version numbers.
 
 ## Security: mutual verification
 
-- **Host side** — per-companion consent (package name + signing-cert hash) before first use; every
-  companion-supplied URL or Intent is validated before the host touches it; the host's TMDB session
-  never crosses the boundary.
-- **Companion side** — the companion verifies the caller's signing certificate before serving a
-  request. Its exported Service fronts the user's provider session; without the check, any app on
-  the device could drive it.
-- Both checks are enforced with `grpc-binder` `SecurityPolicy` instances, wired by the SDK on each
-  side.
+- **Host side.** Binge asks the user for consent for each companion app. The consent record holds
+  the package name and the signing-cert hash. Binge validates every URL or Intent from a companion
+  app before use. Binge's TMDB session never crosses the boundary.
+- **Companion side.** The companion app verifies the caller's signing certificate before it serves
+  a request. Its exported Service fronts the user's provider session. Without the check, any app
+  on the device could drive that session.
+- Both checks use `grpc-binder` `SecurityPolicy` instances. The SDK wires them on each side.
 
 ## Play stance
 
-- No bundled providers, no in-app plugin directory, no promotion of infringing companions.
-- STREAM and PLAYER default to hand-off over in-app playback; render-surface decisions are made
-  per-contract.
+- No bundled providers. No in-app plugin directory. No promotion of infringing companion apps.
+- STREAM and PLAYER prefer hand-off over in-app playback. Each contract makes its own
+  render-surface decision.
 
 ## Versioning
 
-Capabilities answer "what can you do?". Versions answer only "can we parse each other?".
+Capabilities answer "what can you do?". Versions answer "can we parse each other?".
 
-- The proto package version (`binge.integration.request.v1`) is the contract **major**. Within a
-  package, evolution is strictly additive — new fields, new enum values, new rpcs — and
-  `buf breaking` fails CI on anything else. Additive changes need no negotiation: protobuf field
-  numbering plus unknown-field preservation keeps old and new peers compatible in both directions.
-- A breaking change is a new package (`v2`) with a new service, which a companion serves
-  side-by-side with `v1` from the same exported Service. The manifest `<meta-data>` lists the
-  majors a companion serves, so the host picks the highest common major before binding — and shows
-  a directional "update Binge" / "update the companion app" when there is none.
-- A major bump is an escape hatch, not a tool. The append-only discipline is the compatibility
-  story.
+- The proto package version (`binge.integration.request.v1`) is the contract **major**. Inside a
+  package, every change must be additive: new fields, new enum values, new rpcs. CI fails any
+  other change with `buf breaking`. Additive changes need no negotiation. Protobuf field numbers
+  and unknown-field preservation keep old and new peers compatible in both directions.
+- A breaking change becomes a new package (`v2`) with a new service. A companion app serves `v1`
+  and `v2` side by side from the same exported Service. The manifest `<meta-data>` lists the
+  majors a companion app serves. The host picks the highest common major before it binds. When
+  there is no common major, the host shows "update Binge" or "update the companion app".
+- A major bump is an escape hatch, not a tool. The append-only rule is the compatibility story.
