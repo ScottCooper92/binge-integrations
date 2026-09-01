@@ -1,10 +1,29 @@
 name: CI
 
+# The gate for this repository, and the trigger for every bot in this directory:
+# bot-review fires on a successful run of this workflow, author-ci-fix on a failed
+# one, and author-conflicts on one completing against main. They match it by NAME,
+# so renaming this workflow silently unhooks all three.
+#
+# Deliberately NO paths-ignore, unlike Binge's copy. Binge skips the suite for a
+# docs-only diff because that suite is an hour on a contended fleet; this one is a
+# couple of minutes and free on a public repo, so the saving barely exists. The cost
+# would be real: bot-review requires a SUCCESSFUL run of this workflow against the
+# head, so a skipped run means a PR that is never reviewed. Documentation is a
+# primary artefact here — docs/Architecture.md is authoritative, and .ai/ holds the
+# rules the bots themselves read — so a docs filter would bypass review on this
+# repository's most common kind of PR.
 on:
   push:
     branches: [main]
   pull_request:
+    # `ready_for_review` is not in the default set, and without it a PR opened as a
+    # draft and later promoted never gets a first run — so bot-review, which only
+    # fires on a run of this workflow completing, never sees it either. That is the
+    # same stranding author-retarget.yml exists to fix, arriving through another door.
+    types: [opened, synchronize, reopened, ready_for_review]
 
+# Per-ref group: a new commit on the same branch/PR cancels its superseded run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -14,7 +33,16 @@ permissions:
 
 jobs:
   build:
+    # Skip while a PR is a draft, so a stack can be opened as drafts and promoted one
+    # at a time without each queued run preempting the last. Push events to main always
+    # run — `pull_request` is null there. A draft therefore reports conclusion
+    # "skipped", which author-ci-fix and bot-review both already treat as "not green".
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    # Without this a hung Gradle run takes GitHub's 6-hour default. Generous against a
+    # build that currently takes a couple of minutes, so it catches a hang rather than
+    # a slow day.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -25,11 +53,30 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # --continue surfaces every failure in one run rather than stopping at the first,
+      # which matters most to author-ci-fix: it gets exactly one repair attempt per
+      # commit, and a log showing only the first of three failures spends that attempt
+      # fixing a third of the problem.
       - name: Build and test
-        run: ./gradlew build
+        run: ./gradlew build --continue
+
+      # Test reports for triaging a red run. Listed explicitly rather than globbing
+      # **/build/reports/ — the greedy glob is fail-OPEN, so every new report type
+      # Gradle invents silently reappears in the artifact. That blew the free Actions
+      # storage quota three separate times in Binge. Failure-only, kept one day.
+      - name: Upload test reports
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/**'
+          if-no-files-found: ignore
+          retention-days: 1
 
   proto:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
